@@ -17,22 +17,31 @@ export interface Session {
   /** Last time any MCP tool call (or raw MCP request) was observed for
    *  this session. The inactivity watchdog uses this. */
   lastCommandAt: number;
+  /** Set when the game side terminated the player (kick, disconnect,
+   *  or RIP). The MCP session itself stays alive; this is surfaced as a
+   *  tool-result error on the next command that needs the game, and
+   *  cleared the moment join_game creates a new GameClient. */
+  lastGameTermination: TerminationReason | null;
 }
 
+/** Reasons the whole MCP session goes away. Only inactivity-driven and
+ *  lifecycle-driven paths are here; game-side termination (kick, RIP,
+ *  disconnect) is surfaced at the tool-result layer and does NOT tear
+ *  down the MCP session. */
 export type SessionDestroyReason =
   | 'inactivity'
-  | { kind: 'game-kick'; reason: string }
-  | { kind: 'game-disconnect'; reason: string }
-  | { kind: 'game-rip' }
   | 'explicit-close'
   | 'shutdown';
 
 export function describeDestroyReason(reason: SessionDestroyReason): string {
-  if (typeof reason === 'string') return reason;
+  return reason;
+}
+
+function describeGameTermination(reason: TerminationReason): string {
   switch (reason.kind) {
-    case 'game-kick': return `game kicked player: ${reason.reason}`;
-    case 'game-disconnect': return `game socket disconnected: ${reason.reason}`;
-    case 'game-rip': return 'player eaten in-game';
+    case 'kick':       return `game kicked player: ${reason.reason}`;
+    case 'disconnect': return `game socket disconnected: ${reason.reason}`;
+    case 'rip':        return 'player was eaten';
   }
 }
 
@@ -46,7 +55,7 @@ export interface SessionLifecycle {
 export function createSession(
   config: Config,
   usedNicknames: Set<string>,
-  lifecycle: SessionLifecycle
+  _lifecycle: SessionLifecycle
 ): Session {
   const sessionId = randomUUID();
   const transport = new StreamableHTTPServerTransport({
@@ -65,21 +74,25 @@ export function createSession(
     game: null,
     world: null,
     nickname: null,
-    lastCommandAt: Date.now()
+    lastCommandAt: Date.now(),
+    lastGameTermination: null
   };
 
   const bump = () => { session.lastCommandAt = Date.now(); };
 
   const requireJoined = (): GameClient => {
+    // Game-side termination is surfaced here as a tool-result error.
+    // The MCP SDK wraps thrown errors into {isError:true, content:[...]}
+    // without closing the MCP session, so the agent sees a tool error
+    // and can call join_game on the same MCP session to respawn.
+    if (session.lastGameTermination) {
+      throw new Error(
+        `game session ended (${describeGameTermination(session.lastGameTermination)}). ` +
+        `Call join_game to start a new one; the MCP session itself is still open.`
+      );
+    }
     if (!session.game) {
       throw new Error('join_game must be called before any other tool');
-    }
-    if (!session.game.isAlive()) {
-      // GameClient has detected game-side termination; the lifecycle
-      // onDestroy will run shortly if it hasn't already. Fail fast with
-      // a clear message so the harness doesn't send more input to a
-      // dead socket.
-      throw new Error('session terminated; call join_game to resume');
     }
     return session.game;
   };
@@ -91,10 +104,22 @@ export function createSession(
       inputSchema: { nickname: z.string().min(1).max(25) }
     },
     async ({ nickname }) => {
-      if (session.game) {
-        throw new Error('already joined');
-      }
       bump();
+      if (session.game && !session.lastGameTermination) {
+        // Still playing on this MCP session; disallow a second join.
+        throw new Error('already joined; call stop or wait until the current game session ends');
+      }
+      // If the prior game ended, discard its remains before rejoining.
+      if (session.game) {
+        session.game.disconnect();
+        session.game = null;
+      }
+      if (session.nickname) {
+        usedNicknames.delete(session.nickname);
+        session.nickname = null;
+      }
+      session.lastGameTermination = null;
+
       const resolved = resolveNicknameCollision(nickname, usedNicknames);
       usedNicknames.add(resolved);
       const game = new GameClient(
@@ -102,16 +127,19 @@ export function createSession(
         resolved,
         config.session.heartbeatHz
       );
-      // Cascade: when the game side terminates the player (kick, raw
-      // disconnect after welcome, or RIP), tear the MCP session down
-      // too so the agent gets a clear 'session terminated' error on its
-      // next tool call rather than silently acting on a dead socket.
+      // Game-side termination (kick, raw disconnect after welcome, or
+      // RIP) marks the Session's game as dead but leaves the MCP
+      // session alive so the agent can call join_game again on the
+      // same session-id. The destruction cascade to full MCP teardown
+      // is reserved for inactivity (handled elsewhere).
       game.onTerminated((reason: TerminationReason) => {
-        const destroyReason: SessionDestroyReason =
-          reason.kind === 'kick' ? { kind: 'game-kick', reason: reason.reason } :
-          reason.kind === 'rip' ? { kind: 'game-rip' } :
-          { kind: 'game-disconnect', reason: reason.reason };
-        lifecycle.onDestroy(session, destroyReason);
+        session.lastGameTermination = reason;
+        session.game = null;
+        if (session.nickname) {
+          usedNicknames.delete(session.nickname);
+          session.nickname = null;
+        }
+        console.log(`[session] game-side termination (${session.id}): ${describeGameTermination(reason)}`);
       });
       try {
         const info = await game.awaitJoined();
