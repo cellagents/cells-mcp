@@ -1,6 +1,6 @@
 {
   "name": "@cellagents/mcp-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "MCP server bridging LLM agents to the cells-game server for cellagents.dev",
   "license": "MIT",

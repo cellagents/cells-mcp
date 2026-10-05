@@ -36,12 +36,34 @@ export type TerminationReason =
   | { kind: 'disconnect'; reason: string }
   | { kind: 'rip' };
 
+type SteeringState =
+  | { kind: 'idle' }
+  | { kind: 'move_to'; x: number; y: number }
+  | { kind: 'heading'; angle: number };
+
+/** How close (world units) to a move_to target before we consider the
+ *  player arrived and stop steering. Comfortably above the game's own
+ *  MIN_DISTANCE (50) + typical radius so arrival is unambiguous. */
+const ARRIVAL_THRESHOLD = 80;
+
+/** Length (world units) of the direction vector we synthesize for a
+ *  persistent heading. Well above the game's MIN_DISTANCE so the server
+ *  never scales the delta down. */
+const HEADING_PROJECTION = 500;
+
 export class GameClient {
   private socket: Socket;
   private welcomeResolved = false;
   private welcomeDeferred = createDeferred<{ playerId: string; world: { width: number; height: number } }>();
   private heartbeatTimer: NodeJS.Timeout | null = null;
-  private lastTarget: { x: number; y: number } = { x: 0, y: 0 };
+  /** Steering intent, resolved to a mouse-offset on every pump tick.
+   *  idle      → emit (0,0); the player decelerates and halts.
+   *  move_to   → emit (target - player); when inside arrivalThreshold
+   *              the pump switches to idle so the cell doesn't jitter
+   *              past the destination.
+   *  heading   → emit a unit-direction scaled to a safely-large length
+   *              so the game never treats it as "near destination". */
+  private steering: SteeringState = { kind: 'idle' };
   private terminated = false;
   private terminationListener: ((reason: TerminationReason) => void) | null = null;
 
@@ -151,12 +173,66 @@ export class GameClient {
     return this.socket.id ?? '';
   }
 
-  setHeading(target: { x: number; y: number }): void {
-    this.lastTarget = target;
-    // Pass through immediately; the heartbeat pump below will keep sending
-    // the same target between explicit calls so the game server doesn't
-    // kick us for inactivity.
-    this.socket.emit('0', target);
+  /** Head toward a specific world coordinate. The MCP keeps steering the
+   *  cell there every pump tick, re-computing the direction from the
+   *  current player position. When the player arrives within
+   *  ARRIVAL_THRESHOLD the steering goes idle and the cell decelerates. */
+  moveTo(x: number, y: number): void {
+    this.steering = { kind: 'move_to', x, y };
+    this.emitSteering();
+  }
+
+  /** Move indefinitely at a given angle (radians, standard math convention:
+   *  0 = +x, π/2 = +y, i.e. down in screen space). The pump re-emits a
+   *  unit direction every tick so the cell doesn't drift from the heading
+   *  as it moves. */
+  setHeading(angle: number): void {
+    this.steering = { kind: 'heading', angle };
+    this.emitSteering();
+  }
+
+  /** Stop any steering; cell decelerates to a halt. */
+  stop(): void {
+    this.steering = { kind: 'idle' };
+    this.emitSteering();
+  }
+
+  /** Resolve the current steering state against the current snapshot and
+   *  emit a mouse-offset '0' event. Called synchronously by the move_to /
+   *  set_heading / stop entrypoints and by the heartbeat pump. */
+  private emitSteering(): void {
+    const offset = this.computeOffset();
+    this.socket.emit('0', offset);
+  }
+
+  private computeOffset(): { x: number; y: number } {
+    if (this.steering.kind === 'idle') {
+      return { x: 0, y: 0 };
+    }
+    // Fall back to "aim at origin" if we have no snapshot yet - this only
+    // affects the first few ms before the server fires serverTellPlayerMove.
+    const self = this.snapshot?.self;
+    const px = self?.x ?? 0;
+    const py = self?.y ?? 0;
+    if (this.steering.kind === 'move_to') {
+      const dx = this.steering.x - px;
+      const dy = this.steering.y - py;
+      const dist = Math.hypot(dx, dy);
+      if (dist < ARRIVAL_THRESHOLD) {
+        // Latch arrival so subsequent heartbeats emit (0,0) without
+        // recomputing. Avoids microscopic oscillation if the player
+        // overshoots by a hair.
+        this.steering = { kind: 'idle' };
+        return { x: 0, y: 0 };
+      }
+      return { x: dx, y: dy };
+    }
+    // heading: project a fixed-length vector along the angle.
+    const { angle } = this.steering;
+    return {
+      x: Math.cos(angle) * HEADING_PROJECTION,
+      y: Math.sin(angle) * HEADING_PROJECTION
+    };
   }
 
   fireFood(): void {
@@ -180,9 +256,11 @@ export class GameClient {
     const intervalMs = Math.max(1, Math.round(1000 / this.heartbeatHz));
     this.heartbeatTimer = setInterval(() => {
       if (this.terminated) return;
-      // Re-emit last known target; cells-game stamps lastHeartbeat on
-      // every '0' event regardless of target value.
-      this.socket.emit('0', this.lastTarget);
+      // Re-emit a fresh mouse-offset computed from the current steering
+      // state and the latest snapshot position. cells-game stamps
+      // lastHeartbeat on every '0' event regardless of offset value, so
+      // an idle (0,0) offset still keeps us alive.
+      this.emitSteering();
     }, intervalMs);
     // Don't let this timer hold the Node process open on shutdown.
     this.heartbeatTimer.unref?.();
