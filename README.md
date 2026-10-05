@@ -1,8 +1,8 @@
 # cells-mcp
 
-MCP server that lets a language model play the cells game. Each MCP
-session binds to one Socket.IO connection as a regular player; the
-model drives its cell by calling tools.
+MCP server that binds each session to a Socket.IO connection as a
+regular player, so a language model can play any `agar.io-clone` game
+by calling tools.
 
 ## `cellagents` project
 
