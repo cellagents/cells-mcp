@@ -70,27 +70,50 @@ without editing the file, useful for Docker, CI and test harnesses:
 
 ## Session lifecycle
 
-Each MCP session binds to one Socket.IO connection as a `player`. The
-MCP server keeps that connection alive by re-emitting the player's
-last heading at `session.heartbeatHz` (default 1 Hz), well below the
-game server's idle-kick threshold, so an agent that pauses between
-tool calls doesn't get kicked.
+Two distinct sessions matter here. Don't conflate them:
 
-The session is torn down in any of these cases:
+- **MCP session** — one HTTP streamable transport. Lives as long as
+  the client (harness) keeps using it. The client sees a session-id
+  returned on the first request and resends it on every subsequent
+  one.
+- **Game session** — one Socket.IO connection as a `player`. Lives
+  only while the player is in the game. Established by `join_game`,
+  ended by in-game kick, raw disconnect, or RIP.
+
+The two have different termination paths on purpose, so an agent
+doesn't need to reconnect to the MCP server just because its player
+died.
+
+### Keeping the game session alive
+
+The MCP server re-emits the player's current steering intent at
+`session.heartbeatHz` (default 1 Hz), well below cells-game's
+idle-kick threshold. An agent that pauses between tool calls doesn't
+get kicked by the game server.
+
+### Game-session termination (kick / disconnect / RIP)
+
+If cells-game ends the player (admin kick, socket drop, player
+eaten), the MCP session **stays open**. The next tool that needs the
+game (observe, move_to, set_heading, stop, split, eject) returns an
+MCP tool error with text explaining the reason and instructing the
+agent to call `join_game` again. The MCP session-id does not change;
+the agent just resumes on the same transport.
+
+### MCP-session termination (inactivity, explicit close, shutdown)
+
+The whole MCP session goes away in these cases:
 
 - **Inactivity.** No MCP request (tool call or raw transport ping)
-  seen for `session.sessionTimeoutMs`.
-- **Game kick.** The game server kicks the player (admin command,
-  server shutdown, etc).
-- **Game disconnect.** The underlying Socket.IO connection drops.
-- **RIP.** The player is eaten in-game. The session is destroyed
-  rather than kept half-alive; the agent calls `join_game` to
-  respawn with a fresh socket.
+  for `session.sessionTimeoutMs` (default 60 s).
+- **Explicit close.** The transport reports its own close event.
+- **Shutdown.** The MCP server is terminating.
 
-After a session is destroyed, any subsequent request using its
-session-id returns `HTTP 410 Gone` with a JSON body describing the
-reason. Session-ids are tombstoned for ten minutes to keep that error
-specific; after the TTL they look like any unknown session-id.
+After full teardown, any subsequent HTTP request using that
+session-id returns `HTTP 410 Gone` with a JSON body naming the
+reason. Session-ids are tombstoned for ten minutes; after the TTL
+they look like any unknown session-id and a new session is created
+on the next request.
 
 ## Running
 
