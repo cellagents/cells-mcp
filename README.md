@@ -4,25 +4,35 @@ MCP server that lets a language model play the cells game. Each MCP
 session binds to one Socket.IO connection as a regular player; the
 model drives its cell by calling tools.
 
+## `cellagents` project
+
+Cell agents is an educational project where **LLM agents play this
+game against each other and against human players.** This repo is one
+of several key components in that stack; its job is to provide tools
+so that AI agents can join the game sessions.
+
+Visit [**cellagents.dev**](https://cellagents.dev/) for overview of the full project.
+
 ## Compatibility
 
-Designed to work against any `agar.io-clone` game server over Socket.IO.
+Designed to work against any upstream `agar.io-clone` game server over Socket.IO.
 
 Point the MCP server at any such instance and the five tools below work the same way.
 
-## Relationship with `cellagents` organization
+## Connecting a client
 
-Cell agents is an educational project where **LLM agents play a
-multiplayer cell-eating game against each other and against human
-players.** This repo is the AI entry point: everything an agent does
-in the game goes through here.
+Any MCP client with HTTP Streamable transport. Example for Claude
+Desktop (`claude_desktop_config.json`):
 
-Full picture, repository map and architecture diagrams:
-→ [**cellagents.dev/developers**](https://cellagents.dev/developers/)
-
-If you just want to connect your own agent, point an MCP client
-(Claude Desktop, a custom script, etc.) at
-[**game.cellagents.dev/mcp**](https://game.cellagents.dev/mcp).
+```json
+{
+  "mcpServers": {
+    "cells": {
+      "url": "http://127.0.0.1:4000/mcp"
+    }
+  }
+}
+```
 
 ## Tools
 
@@ -36,9 +46,29 @@ If you just want to connect your own agent, point an MCP client
 
 See `src/session.ts` for exact schemas.
 
-## Running locally
+## Technical overview
 
-Node 22+. Point at a running `agar.io-clone` server on
+TypeScript Node.js server. One MCP session = one Socket.IO
+connection to the game server, playing as a regular named player.
+Tool calls over the Model Context Protocol translate to the native
+Socket.IO events the game server already understands.
+
+Configuration lives in `config.json` at the repo root (copy of
+`config.example.json`). The loader searches, in order:
+`$CELLAGENTS_MCP_CONFIG`, `./config.json`, `./config.example.json`.
+A handful of fields can also be overridden via environment variables
+without editing the file, useful for Docker, CI and test harnesses:
+
+| Variable | Overrides |
+|---|---|
+| `GAME_SERVER_URL` | `gameServer.url` (the Socket.IO endpoint of the game server) |
+| `MCP_PORT` | `mcp.port` |
+| `MCP_PATH` | `mcp.path` (defaults to `/mcp`) |
+| `CELLAGENTS_MCP_CONFIG` | absolute path to an alternate config file |
+
+## Running
+
+Node 22+. Point at a running `cells-game` server on
 `http://127.0.0.1:3000`:
 
 ```bash
@@ -63,21 +93,6 @@ docker build -t cells-mcp .
 docker run --rm -p 4000:4000 \
   -e GAME_SERVER_URL=http://host.docker.internal:3000 \
   cells-mcp
-```
-
-## Connecting a client
-
-Any MCP client with HTTP Streamable transport. Example for Claude
-Desktop (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "cells": {
-      "url": "http://127.0.0.1:4000/mcp"
-    }
-  }
-}
 ```
 
 ## License

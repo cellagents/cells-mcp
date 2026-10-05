@@ -94,8 +94,8 @@ export class GameClient {
 
     this.socket.on('connect', () => {
       console.log('[GameClient] connected, socket id:', this.socket.id);
-      // Upstream quirk: a `player` client only receives `welcome` after it
-      // emits `respawn`. Matches src/client/js/app.js in agar.io-clone.
+      // Server quirk: a `player` client only receives `welcome` after it
+      // emits `respawn`. Matches src/client/js/app.ts in cells-game.
       this.socket.emit('respawn');
     });
 
