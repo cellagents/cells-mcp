@@ -4,10 +4,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 import type { Config } from './config.js';
-import { AdminClient } from './adminClient.js';
 import { GameClient } from './gameClient.js';
 import { buildObservation } from './observe.js';
-import { clampBounds, clampDeclared, computeHonestEstimate } from './cost.js';
 
 export interface Session {
   id: string;
@@ -16,15 +14,9 @@ export interface Session {
   game: GameClient | null;
   world: { width: number; height: number } | null;
   nickname: string | null;
-  joinToken: string | null;
 }
 
-/**
- * One MCP session wraps one game-server player. The McpServer and its
- * transport are allocated per-session so the SDK's session-id dispatch does
- * the routing for us, and tool handlers close over per-session state.
- */
-export function createSession(config: Config, adminClient: AdminClient, usedNicknames: Set<string>): Session {
+export function createSession(config: Config, usedNicknames: Set<string>): Session {
   const sessionId = randomUUID();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => sessionId
@@ -41,8 +33,7 @@ export function createSession(config: Config, adminClient: AdminClient, usedNick
     transport,
     game: null,
     world: null,
-    nickname: null,
-    joinToken: null
+    nickname: null
   };
 
   const requireJoined = (): GameClient => {
@@ -55,7 +46,7 @@ export function createSession(config: Config, adminClient: AdminClient, usedNick
   server.registerTool(
     'join_game',
     {
-      description: 'Join the agar.io game under a nickname. Must be called first. Returns the resolved player_id and the world dimensions. Nickname collisions are auto-resolved by appending an index.',
+      description: 'Join the game under a nickname. Must be called first. Returns the resolved player_id and the world dimensions. Nickname collisions are auto-resolved by appending an index.',
       inputSchema: { nickname: z.string().min(1).max(25) }
     },
     async ({ nickname }) => {
@@ -64,18 +55,16 @@ export function createSession(config: Config, adminClient: AdminClient, usedNick
       }
       const resolved = resolveNicknameCollision(nickname, usedNicknames);
       usedNicknames.add(resolved);
-      const joinToken = randomUUID();
-      const game = new GameClient(config.gameServer.url, resolved, joinToken);
+      const game = new GameClient(config.gameServer.url, resolved);
       try {
         const info = await game.awaitJoined();
         session.game = game;
         session.world = info.world;
         session.nickname = resolved;
-        session.joinToken = joinToken;
         return {
           content: [{
             type: 'text',
-            text: JSON.stringify({ player_id: info.playerId, nickname: resolved, world: info.world, join_token: joinToken })
+            text: JSON.stringify({ player_id: info.playerId, nickname: resolved, world: info.world })
           }]
         };
       } catch (err) {
@@ -89,7 +78,7 @@ export function createSession(config: Config, adminClient: AdminClient, usedNick
   server.registerTool(
     'observe',
     {
-      description: 'Return a compact JSON snapshot of what the player sees this tick: own cells, nearest threats and prey, nearest viruses, map edges, and current round phase.',
+      description: 'Return a compact JSON snapshot of what the player sees this tick: own cells, nearest threats and prey, nearest viruses, map edges, and a food hint.',
       inputSchema: {}
     },
     async () => {
@@ -156,57 +145,6 @@ export function createSession(config: Config, adminClient: AdminClient, usedNick
       const game = requireJoined();
       game.fireFood();
       return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
-    }
-  );
-
-  server.registerTool(
-    'heartbeat',
-    {
-      description: 'Declare the metabolic cost of the last tick. The client is expected to compute cost itself from its own model usage; the server clamps and applies it as a drain multiplier.',
-      inputSchema: {
-        cost: z.number(),
-        model: z.string(),
-        prompt_tokens: z.number().int().nonnegative()
-      }
-    },
-    async ({ cost, model, prompt_tokens }) => {
-      const game = requireJoined();
-      game.recordHeartbeat(prompt_tokens);
-      const honest = computeHonestEstimate(game, config, model);
-      const applied = clampDeclared(cost, honest, config);
-      const bounds = clampBounds(honest, config);
-      try {
-        await adminClient.setDrainMultiplier(game.playerId, applied);
-      } catch (err) {
-        console.warn('[heartbeat] drain apply failed:', (err as Error).message);
-      }
-      const tier = config.modelTiers[model] ?? config.modelTiers.default ?? 1;
-      console.log(`[honest-vs-declared] player=${session.nickname} declared=${cost} honest=${honest.toFixed(3)} applied=${applied.toFixed(3)} model=${model}`);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ ok: true, applied_drain: applied, honest_estimate: honest, declared: cost, clamp: bounds, model_tier: tier })
-        }]
-      };
-    }
-  );
-
-  server.registerTool(
-    'status',
-    {
-      description: 'Return the current round phase, remaining time (seconds, if in countdown), and the leaderboard top names.',
-      inputSchema: {}
-    },
-    async () => {
-      const game = requireJoined();
-      const round = game.roundState ?? { phase: 'open', timeRemaining: null, endsAt: null, winner: null };
-      const top = game.leaderboard.map(e => e.name);
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ phase: round.phase, time_remaining: round.timeRemaining, winner: round.winner, leaderboard_top: top })
-        }]
-      };
     }
   );
 

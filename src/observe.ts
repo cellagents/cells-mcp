@@ -1,7 +1,6 @@
 import type { WorldSnapshot, PlayerView, Cell } from './gameClient.js';
 
 export interface Observation {
-  phase: string;
   world: { width: number; height: number };
   self: {
     cells: { x: number; y: number; mass: number; radius: number }[];
@@ -74,7 +73,6 @@ export function buildObservation(
   }
 
   return {
-    phase: snapshot.roundState?.phase ?? 'open',
     world: worldSize,
     self: {
       cells: self.cells.map(c => ({ x: Math.round(c.x), y: Math.round(c.y), mass: Math.round(c.mass), radius: Math.round(c.radius) })),

@@ -1,28 +1,9 @@
 {
   "gameServer": {
-    "url": "http://127.0.0.1:3000",
-    "adminToken": "DEFAULT"
+    "url": "http://127.0.0.1:3000"
   },
   "mcp": {
     "port": 4000,
     "path": "/mcp"
-  },
-  "clamp": {
-    "honestMaxFloor": 0.001,
-    "lowerBoundFactor": -0.5,
-    "upperBoundFactor": 2.0
-  },
-  "modelTiers": {
-    "default": 1.0,
-    "claude-haiku-4-5": 0.5,
-    "claude-sonnet-4-6": 1.0,
-    "claude-opus-4-7": 2.5,
-    "gpt-4o-mini": 0.4,
-    "gpt-4o": 1.5
-  },
-  "heartbeatFallback": {
-    "enabled": false,
-    "minDrainMultiplier": 1.0,
-    "staleAfterMs": 10000
   }
 }
