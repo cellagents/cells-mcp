@@ -4,7 +4,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 import type { Config } from './config.js';
-import { GameClient } from './gameClient.js';
+import { GameClient, TerminationReason } from './gameClient.js';
 import { buildObservation } from './observe.js';
 
 export interface Session {
@@ -14,16 +14,47 @@ export interface Session {
   game: GameClient | null;
   world: { width: number; height: number } | null;
   nickname: string | null;
+  /** Last time any MCP tool call (or raw MCP request) was observed for
+   *  this session. The inactivity watchdog uses this. */
+  lastCommandAt: number;
 }
 
-export function createSession(config: Config, usedNicknames: Set<string>): Session {
+export type SessionDestroyReason =
+  | 'inactivity'
+  | { kind: 'game-kick'; reason: string }
+  | { kind: 'game-disconnect'; reason: string }
+  | { kind: 'game-rip' }
+  | 'explicit-close'
+  | 'shutdown';
+
+export function describeDestroyReason(reason: SessionDestroyReason): string {
+  if (typeof reason === 'string') return reason;
+  switch (reason.kind) {
+    case 'game-kick': return `game kicked player: ${reason.reason}`;
+    case 'game-disconnect': return `game socket disconnected: ${reason.reason}`;
+    case 'game-rip': return 'player eaten in-game';
+  }
+}
+
+export interface SessionLifecycle {
+  /** Called when this session wants to be destroyed. Implementor is
+   *  responsible for removing it from the active-sessions map and
+   *  recording a tombstone. */
+  onDestroy(session: Session, reason: SessionDestroyReason): void;
+}
+
+export function createSession(
+  config: Config,
+  usedNicknames: Set<string>,
+  lifecycle: SessionLifecycle
+): Session {
   const sessionId = randomUUID();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => sessionId
   });
 
   const server = new McpServer(
-    { name: 'cellagents-mcp', version: '0.1.0' },
+    { name: 'cellagents-mcp', version: '1.0.0' },
     { capabilities: { tools: {} } }
   );
 
@@ -33,12 +64,22 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
     transport,
     game: null,
     world: null,
-    nickname: null
+    nickname: null,
+    lastCommandAt: Date.now()
   };
+
+  const bump = () => { session.lastCommandAt = Date.now(); };
 
   const requireJoined = (): GameClient => {
     if (!session.game) {
       throw new Error('join_game must be called before any other tool');
+    }
+    if (!session.game.isAlive()) {
+      // GameClient has detected game-side termination; the lifecycle
+      // onDestroy will run shortly if it hasn't already. Fail fast with
+      // a clear message so the harness doesn't send more input to a
+      // dead socket.
+      throw new Error('session terminated; call join_game to resume');
     }
     return session.game;
   };
@@ -53,9 +94,25 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
       if (session.game) {
         throw new Error('already joined');
       }
+      bump();
       const resolved = resolveNicknameCollision(nickname, usedNicknames);
       usedNicknames.add(resolved);
-      const game = new GameClient(config.gameServer.url, resolved);
+      const game = new GameClient(
+        config.gameServer.url,
+        resolved,
+        config.session.heartbeatHz
+      );
+      // Cascade: when the game side terminates the player (kick, raw
+      // disconnect after welcome, or RIP), tear the MCP session down
+      // too so the agent gets a clear 'session terminated' error on its
+      // next tool call rather than silently acting on a dead socket.
+      game.onTerminated((reason: TerminationReason) => {
+        const destroyReason: SessionDestroyReason =
+          reason.kind === 'kick' ? { kind: 'game-kick', reason: reason.reason } :
+          reason.kind === 'rip' ? { kind: 'game-rip' } :
+          { kind: 'game-disconnect', reason: reason.reason };
+        lifecycle.onDestroy(session, destroyReason);
+      });
       try {
         const info = await game.awaitJoined();
         session.game = game;
@@ -82,6 +139,7 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
       inputSchema: {}
     },
     async () => {
+      bump();
       const game = requireJoined();
       if (!game.snapshot || !session.world) {
         return { content: [{ type: 'text', text: JSON.stringify({ waiting: true }) }] };
@@ -102,6 +160,7 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
       }
     },
     async (args) => {
+      bump();
       const game = requireJoined();
       const snapshot = game.snapshot;
       let target: { x: number; y: number };
@@ -128,6 +187,7 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
       inputSchema: {}
     },
     async () => {
+      bump();
       const game = requireJoined();
       game.split();
       const cells = game.snapshot?.self.cells.length ?? 0;
@@ -142,6 +202,7 @@ export function createSession(config: Config, usedNicknames: Set<string>): Sessi
       inputSchema: {}
     },
     async () => {
+      bump();
       const game = requireJoined();
       game.fireFood();
       return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
