@@ -1,12 +1,10 @@
 import express from 'express';
 
 import { loadConfig } from './config.js';
-import { AdminClient } from './adminClient.js';
 import { createSession, destroySession, Session } from './session.js';
 
 async function main() {
   const config = loadConfig();
-  const adminClient = new AdminClient(config);
 
   const sessions = new Map<string, Session>();
   const usedNicknames = new Set<string>();
@@ -27,7 +25,7 @@ async function main() {
     let session: Session | undefined = sessionId ? sessions.get(sessionId) : undefined;
 
     if (!session) {
-      session = createSession(config, adminClient, usedNicknames);
+      session = createSession(config, usedNicknames);
       sessions.set(session.id, session);
       session.transport.onclose = () => {
         if (session) {

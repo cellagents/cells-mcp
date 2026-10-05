@@ -1,8 +1,5 @@
 import { io, Socket } from 'socket.io-client';
 
-// Shape of the per-tick view the game server emits as `serverTellPlayerMove`.
-// Positions and sizes are in world coordinates, matching the upstream
-// agar.io-clone data model.
 export interface Cell {
   x: number;
   y: number;
@@ -31,57 +28,26 @@ export interface WorldSnapshot {
   food: FoodView[];
   mass: MassFoodView[];
   viruses: VirusView[];
-  roundState: RoundState | null;
   lastUpdated: number;
 }
 
-export interface RoundState {
-  phase: 'open' | 'sudden_death' | 'countdown' | 'ended';
-  timeRemaining: number | null;
-  endsAt: number | null;
-  winner: string | null;
-}
-
-export interface LeaderboardEntry { id: string; name: string; }
-
-/**
- * GameClient wraps one Socket.IO connection to the game server and keeps the
- * last snapshot it received, so tools can read current state synchronously.
- * One instance per MCP session.
- */
 export class GameClient {
   private socket: Socket;
   private welcomeResolved = false;
   private welcomeDeferred = createDeferred<{ playerId: string; world: { width: number; height: number } }>();
 
   snapshot: WorldSnapshot | null = null;
-  roundState: RoundState | null = null;
-  leaderboard: LeaderboardEntry[] = [];
-
-  // Observed timing for the honest-cost estimator. toolCallIntervals holds the
-  // gap between the last few heartbeat calls (ms), promptTokensHistory is the
-  // declared prompt_tokens for the same window.
-  readonly toolCallIntervals: number[] = [];
-  readonly promptTokensHistory: number[] = [];
-  lastHeartbeatAt: number | null = null;
 
   constructor(
     private readonly gameServerUrl: string,
-    private readonly nickname: string,
-    public readonly joinToken: string
+    private readonly nickname: string
   ) {
     this.socket = io(this.gameServerUrl, {
-      query: {
-        type: 'player',
-        join_token: this.joinToken
-      },
+      query: { type: 'player' },
       reconnection: false
     });
 
-    this.socket.on('welcome', (playerSettings: any, gameSizes: { width: number; height: number }) => {
-      // Mirror the default client's handshake: the server expects us to send
-      // our chosen nickname back via `gotit` before it spawns us into the
-      // map. socket.id is only final after `connect`, so we read it here.
+    this.socket.on('welcome', (_playerSettings: any, gameSizes: { width: number; height: number }) => {
       const playerPayload = {
         name: this.nickname,
         screenWidth: 1,
@@ -108,18 +74,8 @@ export class GameClient {
         food,
         mass,
         viruses,
-        roundState: this.roundState,
         lastUpdated: Date.now()
       };
-    });
-
-    this.socket.on('roundState', (state: RoundState) => {
-      this.roundState = state;
-      if (this.snapshot) this.snapshot.roundState = state;
-    });
-
-    this.socket.on('leaderboard', (data: { players: number; leaderboard: LeaderboardEntry[] }) => {
-      this.leaderboard = data.leaderboard || [];
     });
 
     this.socket.on('kick', (reason: string) => {
@@ -138,9 +94,8 @@ export class GameClient {
 
     this.socket.on('connect', () => {
       console.log('[GameClient] connected, socket id:', this.socket.id);
-      // Upstream protocol quirk: a `player` client never receives `welcome`
-      // until it asks for it by emitting `respawn`. See src/client/js/app.js
-      // in agar.io-clone, which fires `respawn` immediately after connect.
+      // Upstream quirk: a `player` client only receives `welcome` after it
+      // emits `respawn`. Matches src/client/js/app.js in agar.io-clone.
       this.socket.emit('respawn');
     });
 
@@ -161,7 +116,6 @@ export class GameClient {
   }
 
   setHeading(target: { x: number; y: number }): void {
-    // Native heartbeat/target event in upstream protocol.
     this.socket.emit('0', target);
   }
 
@@ -175,17 +129,6 @@ export class GameClient {
 
   disconnect(): void {
     this.socket.disconnect();
-  }
-
-  recordHeartbeat(promptTokens: number): void {
-    const now = Date.now();
-    if (this.lastHeartbeatAt !== null) {
-      this.toolCallIntervals.push(now - this.lastHeartbeatAt);
-      if (this.toolCallIntervals.length > 10) this.toolCallIntervals.shift();
-    }
-    this.lastHeartbeatAt = now;
-    this.promptTokensHistory.push(promptTokens);
-    if (this.promptTokensHistory.length > 10) this.promptTokensHistory.shift();
   }
 }
 
