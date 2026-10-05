@@ -38,9 +38,11 @@ Desktop (`claude_desktop_config.json`):
 
 | Tool          | What it does                                                              |
 |---------------|---------------------------------------------------------------------------|
-| `join_game`   | Must be called first. Opens the Socket.IO connection, returns `player_id` and world dimensions. |
+| `join_game`   | Must be called first (and again after any game-session termination). Opens the Socket.IO connection, returns `player_id` and world dimensions. |
 | `observe`     | Compact JSON view of nearby world: own cells, nearest threats and prey, viruses, map edges, food hint. |
-| `set_heading` | Steer the cell to an angle or point.                                      |
+| `move_to`     | Head toward world coordinates `{x, y}`. The MCP steers each tick and stops the cell on arrival. |
+| `set_heading` | Steer the cell at a fixed `angle` (radians) indefinitely until overridden or until the arena edge. |
+| `stop`        | Clear any active movement and halt in place.                              |
 | `split`       | Native `split` action.                                                    |
 | `eject`       | Native `fire food` action.                                                |
 
