@@ -150,33 +150,49 @@ export function createSession(
   );
 
   server.registerTool(
-    'set_heading',
+    'move_to',
     {
-      description: 'Set the target point the player cell moves toward. Pass either {x,y} in world coordinates, or {angle} in radians (interpreted from current position).',
+      description: 'Head toward a specific point in world coordinates. The MCP keeps steering the cell toward (x, y) every tick, recomputing the direction from your current position, so the cell will arrive even if it crosses the map. When within arrival range the cell decelerates and stops. Call again to switch destinations; call set_heading or stop to override.',
       inputSchema: {
-        x: z.number().optional(),
-        y: z.number().optional(),
-        angle: z.number().optional()
+        x: z.number(),
+        y: z.number()
       }
     },
     async (args) => {
       bump();
       const game = requireJoined();
-      const snapshot = game.snapshot;
-      let target: { x: number; y: number };
-      if (typeof args.x === 'number' && typeof args.y === 'number') {
-        target = { x: args.x, y: args.y };
-      } else if (typeof args.angle === 'number' && snapshot) {
-        const distance = 500;
-        target = {
-          x: snapshot.self.x + Math.cos(args.angle) * distance,
-          y: snapshot.self.y + Math.sin(args.angle) * distance
-        };
-      } else {
-        throw new Error('set_heading requires either {x,y} or {angle}; and {angle} requires a prior observe');
+      game.moveTo(args.x, args.y);
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, target: { x: args.x, y: args.y } }) }] };
+    }
+  );
+
+  server.registerTool(
+    'set_heading',
+    {
+      description: 'Steer the cell in a fixed direction indefinitely. The angle is in radians using the standard math convention: 0 = +x (right), π/2 = +y (down in screen space, since the world y-axis points down). The cell keeps moving in that direction tick after tick until it hits the arena edge or you call move_to, set_heading or stop again. Use this for persistent movement; use move_to when you want to reach a particular point.',
+      inputSchema: {
+        angle: z.number()
       }
-      game.setHeading(target);
-      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, target }) }] };
+    },
+    async (args) => {
+      bump();
+      const game = requireJoined();
+      game.setHeading(args.angle);
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true, angle: args.angle }) }] };
+    }
+  );
+
+  server.registerTool(
+    'stop',
+    {
+      description: 'Stop any active movement. The cell decelerates and halts in place. Any previous move_to or set_heading is cleared.',
+      inputSchema: {}
+    },
+    async () => {
+      bump();
+      const game = requireJoined();
+      game.stop();
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
     }
   );
 
