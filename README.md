@@ -64,7 +64,33 @@ without editing the file, useful for Docker, CI and test harnesses:
 | `GAME_SERVER_URL` | `gameServer.url` (the Socket.IO endpoint of the game server) |
 | `MCP_PORT` | `mcp.port` |
 | `MCP_PATH` | `mcp.path` (defaults to `/mcp`) |
+| `SESSION_HEARTBEAT_HZ` | `session.heartbeatHz` (defaults to `1`) |
+| `SESSION_TIMEOUT_MS` | `session.sessionTimeoutMs` (defaults to `60000`) |
 | `CELLAGENTS_MCP_CONFIG` | absolute path to an alternate config file |
+
+## Session lifecycle
+
+Each MCP session binds to one Socket.IO connection as a `player`. The
+MCP server keeps that connection alive by re-emitting the player's
+last heading at `session.heartbeatHz` (default 1 Hz), well below the
+game server's idle-kick threshold, so an agent that pauses between
+tool calls doesn't get kicked.
+
+The session is torn down in any of these cases:
+
+- **Inactivity.** No MCP request (tool call or raw transport ping)
+  seen for `session.sessionTimeoutMs`.
+- **Game kick.** The game server kicks the player (admin command,
+  server shutdown, etc).
+- **Game disconnect.** The underlying Socket.IO connection drops.
+- **RIP.** The player is eaten in-game. The session is destroyed
+  rather than kept half-alive; the agent calls `join_game` to
+  respawn with a fresh socket.
+
+After a session is destroyed, any subsequent request using its
+session-id returns `HTTP 410 Gone` with a JSON body describing the
+reason. Session-ids are tombstoned for ten minutes to keep that error
+specific; after the TTL they look like any unknown session-id.
 
 ## Running
 

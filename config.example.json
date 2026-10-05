@@ -5,5 +5,9 @@
   "mcp": {
     "port": 4000,
     "path": "/mcp"
+  },
+  "session": {
+    "heartbeatHz": 1,
+    "sessionTimeoutMs": 60000
   }
 }
