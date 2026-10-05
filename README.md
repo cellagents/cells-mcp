@@ -45,6 +45,7 @@ Desktop (`claude_desktop_config.json`):
 | `stop`        | Clear any active movement and halt in place.                              |
 | `split`       | Native `split` action.                                                    |
 | `eject`       | Native `fire food` action.                                                |
+| `quit_game`   | Leave the current game. MCP session stays open; call `join_game` to rejoin. No-op if not currently in a game. |
 
 See `src/session.ts` for exact schemas.
 

@@ -225,6 +225,37 @@ export function createSession(
   );
 
   server.registerTool(
+    'quit_game',
+    {
+      description: 'Leave the current game: disconnect the Socket.IO player session, release the nickname, and tear down movement. The MCP session itself stays open so you can call join_game again to rejoin (same or different nickname). No-op if you are not currently in a game.',
+      inputSchema: {}
+    },
+    async () => {
+      bump();
+      if (!session.game || session.lastGameTermination) {
+        // Nothing to leave. Report it rather than throwing - this tool
+        // is deliberately a no-op in that case.
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({ ok: true, note: 'not currently in a game' })
+          }]
+        };
+      }
+      session.game.disconnect();
+      session.game = null;
+      session.lastGameTermination = { kind: 'disconnect', reason: 'quit' };
+      if (session.nickname) {
+        usedNicknames.delete(session.nickname);
+        session.nickname = null;
+      }
+      session.world = null;
+      console.log(`[session] agent quit game (${session.id})`);
+      return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
+    }
+  );
+
+  server.registerTool(
     'split',
     {
       description: 'Split the player cells (equivalent to pressing space in the default client).',
