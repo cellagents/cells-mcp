@@ -125,7 +125,6 @@ Node 22+. Point at a running `cells-game` server on
 
 ```bash
 npm install
-npm run build
 cp config.example.json config.json      # edit if needed
 npm start
 ```
