@@ -15,6 +15,14 @@ export interface Config {
      *  disconnect, RIP) also tears down the session immediately,
      *  independent of this timer. */
     sessionTimeoutMs: number;
+    /** Viewport dimensions the MCP subscriber advertises to the game
+     *  server. In protocol 1.0 this becomes the Subscribe payload's
+     *  `screen` field (clamped by the server's server.maxViewport).
+     *  In legacy mode it goes into gotit.screenWidth/Height; a 1x1
+     *  default here would make the server cull almost everything
+     *  out of the observation stream. 1920x1920 covers a reasonable
+     *  LLM context window and sits inside typical maxViewport limits. */
+    viewport: { width: number; height: number };
   };
 }
 
@@ -41,7 +49,10 @@ export function loadConfig(): Config {
   // Back-compat: if an older config.json predates the session block,
   // fill in defaults instead of crashing.
   if (!cfg.session) {
-    cfg.session = { heartbeatHz: 1, sessionTimeoutMs: 60_000 };
+    cfg.session = { heartbeatHz: 1, sessionTimeoutMs: 60_000, viewport: { width: 1920, height: 1920 } };
+  }
+  if (!cfg.session.viewport) {
+    cfg.session.viewport = { width: 1920, height: 1920 };
   }
 
   if (process.env.GAME_SERVER_URL) cfg.gameServer.url = process.env.GAME_SERVER_URL;

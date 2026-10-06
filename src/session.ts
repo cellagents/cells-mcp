@@ -4,14 +4,15 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { z } from 'zod';
 
 import type { Config } from './config.js';
-import { GameClient, TerminationReason } from './gameClient.js';
+import type { TerminationReason } from './gameClient.js';
+import { createGameClient, type AnyGameClient } from './createGameClient.js';
 import { buildObservation } from './observe.js';
 
 export interface Session {
   id: string;
   server: McpServer;
   transport: StreamableHTTPServerTransport;
-  game: GameClient | null;
+  game: AnyGameClient | null;
   world: { width: number; height: number } | null;
   nickname: string | null;
   /** Last time any MCP tool call (or raw MCP request) was observed for
@@ -80,7 +81,7 @@ export function createSession(
 
   const bump = () => { session.lastCommandAt = Date.now(); };
 
-  const requireJoined = (): GameClient => {
+  const requireJoined = (): AnyGameClient => {
     // Game-side termination is surfaced here as a tool-result error.
     // The MCP SDK wraps thrown errors into {isError:true, content:[...]}
     // without closing the MCP session, so the agent sees a tool error
@@ -122,9 +123,10 @@ export function createSession(
 
       const resolved = resolveNicknameCollision(nickname, usedNicknames);
       usedNicknames.add(resolved);
-      const game = new GameClient(
+      const game = await createGameClient(
         config.gameServer.url,
         resolved,
+        config.session.viewport,
         config.session.heartbeatHz
       );
       // Game-side termination (kick, raw disconnect after welcome, or
@@ -264,7 +266,10 @@ export function createSession(
     async () => {
       bump();
       const game = requireJoined();
-      game.split();
+      const ok = game.split();
+      if (!ok) {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: "action 'split' is not currently permitted by the server (not listed in welcome.actions / actionsChanged)" }) }] };
+      }
       const cells = game.snapshot?.self.cells.length ?? 0;
       return { content: [{ type: 'text', text: JSON.stringify({ ok: true, cells }) }] };
     }
@@ -279,7 +284,10 @@ export function createSession(
     async () => {
       bump();
       const game = requireJoined();
-      game.fireFood();
+      const ok = game.fireFood();
+      if (!ok) {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: "action 'eject' is not currently permitted by the server (not listed in welcome.actions / actionsChanged)" }) }] };
+      }
       return { content: [{ type: 'text', text: JSON.stringify({ ok: true }) }] };
     }
   );

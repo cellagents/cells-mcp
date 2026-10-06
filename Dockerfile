@@ -1,6 +1,9 @@
 # Multi-stage build for the MCP server. Build stage compiles TypeScript to
 # dist/; runtime stage ships only production deps and compiled JS.
 FROM node:22-alpine AS build
+# git is needed by npm to resolve the @cellagents/game-protocol
+# dependency, which is served as a tagged ref off its GitHub repo.
+RUN apk add --no-cache git
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -9,6 +12,7 @@ COPY src ./src
 RUN npm run build
 
 FROM node:22-alpine AS runtime
+RUN apk add --no-cache git
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

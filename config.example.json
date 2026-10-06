@@ -8,6 +8,7 @@
   },
   "session": {
     "heartbeatHz": 1,
-    "sessionTimeoutMs": 60000
+    "sessionTimeoutMs": 60000,
+    "viewport": { "width": 1920, "height": 1920 }
   }
 }
