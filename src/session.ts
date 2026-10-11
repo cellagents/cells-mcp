@@ -127,7 +127,10 @@ export function createSession(
         config.gameServer.url,
         resolved,
         config.session.viewport,
-        config.session.heartbeatHz
+        config.session.heartbeatHz,
+        // Forward the MCP session id so the game server can thread
+        // reconnects from one agent run through its admin audit.
+        session.id
       );
       // Game-side termination (kick, raw disconnect after welcome, or
       // RIP) marks the Session's game as dead but leaves the MCP

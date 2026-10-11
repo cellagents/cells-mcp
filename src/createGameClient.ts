@@ -19,11 +19,15 @@ export async function createGameClient(
     gameServerUrl: string,
     nickname: string,
     viewport: { width: number; height: number },
-    heartbeatHz: number
+    heartbeatHz: number,
+    /** Opaque per-MCP-session identity, forwarded to protocol 1.0
+     *  servers as `subscribe.clientId`. The legacy wire has no
+     *  slot for this, so the arg is ignored in legacy mode. */
+    clientId?: string
 ): Promise<AnyGameClient> {
     const mode = await probe(gameServerUrl);
     if (mode === 'protocol-1.0') {
-        return new GameClient(gameServerUrl, nickname, viewport, heartbeatHz);
+        return new GameClient(gameServerUrl, nickname, viewport, heartbeatHz, clientId);
     }
     return new LegacyGameClient(gameServerUrl, nickname, viewport, heartbeatHz);
 }

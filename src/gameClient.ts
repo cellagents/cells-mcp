@@ -7,6 +7,7 @@
 // per-kind arrays the rest of cells-mcp consumes (WorldSnapshot).
 // Keeps observe() independent of wire version.
 
+import { readFileSync } from 'fs';
 import { io, Socket } from 'socket.io-client';
 import {
     PROTOCOL_VERSION,
@@ -24,7 +25,25 @@ import {
 /** User-agent string sent to the server on subscribe. Keep in sync
  *  with package.json; manual bump is fine until this repo adopts
  *  a build-time inject. */
-export const CELLS_MCP_USER_AGENT = 'cells-mcp/2.0.0';
+/** User-agent string. Resolved at module load from this package's
+ *  own `package.json`, so a version bump here never requires a code
+ *  edit. Falls back to `cells-mcp/unknown` if the manifest can't be
+ *  read (e.g. a bundler stripped it). */
+export const CELLS_MCP_USER_AGENT = resolveUserAgent();
+
+function resolveUserAgent(): string {
+    try {
+        const url = new URL('../package.json', import.meta.url);
+        const raw = readFileSync(url, 'utf8');
+        const parsed = JSON.parse(raw) as { version?: unknown };
+        if (typeof parsed.version === 'string' && parsed.version.length > 0) {
+            return `cells-mcp/${parsed.version}`;
+        }
+    } catch {
+        // fall through
+    }
+    return 'cells-mcp/unknown';
+}
 
 export interface Cell {
     x: number;
@@ -102,7 +121,13 @@ export class GameClient {
         private readonly gameServerUrl: string,
         private readonly nickname: string,
         private readonly viewport: { width: number; height: number },
-        private readonly heartbeatHz: number = 1
+        private readonly heartbeatHz: number = 1,
+        /** Opaque per-MCP-session identity. Sent as `clientId` on
+         *  subscribe so the game server can link reconnects inside
+         *  one MCP session in its admin audit. The caller passes the
+         *  MCP session id; without it the server mints a fresh one
+         *  per socket and reconnect correlation is lost. */
+        private readonly clientId?: string
     ) {
         this.socket = io(this.gameServerUrl, { reconnection: false });
 
@@ -113,7 +138,8 @@ export class GameClient {
                 userAgent: CELLS_MCP_USER_AGENT,
                 capabilities: ['presence', 'steer', 'act'],
                 name: this.nickname,
-                screen: { width: this.viewport.width, height: this.viewport.height }
+                screen: { width: this.viewport.width, height: this.viewport.height },
+                ...(this.clientId ? { clientId: this.clientId } : {})
             });
         });
 
