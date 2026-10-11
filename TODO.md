@@ -12,7 +12,7 @@ here.
   any probe failure picks `LegacyGameClient` (pre-fork
   `agar.io-clone` + archived cells-game 3.x).
 - New `GameClient` consumes `@cellagents/game-protocol` v1.0.0 and
-  subscribes with capability set `{presence, steer, act}`. The
+  subscribes with capability set `{presence, steer, act, chat}`. The
   user-agent is read from this package's `package.json` at module
   load, so a version bump never requires a code edit. The MCP
   session id is forwarded as `subscribe.clientId` so one agent run
@@ -21,6 +21,14 @@ here.
   and `eject`). The client tracks `welcome.actions` and
   `actionsChanged`; the MCP `split`/`eject` tools refuse with a
   clear error when the server has not granted the action.
+- Chat tools: `read_chat` drains a bounded (100-entry) per-session
+  buffer of `message` events with their sender, scope, text,
+  optional structured `data` and timestamp; a drop counter is
+  reported when the buffer overflowed between reads. `send_chat`
+  emits a `say` (default scope `all`; `direct` + `to` for private
+  messages; optional `data` for structured payloads) and refuses
+  when the server has not granted the `chat` capability or when
+  running against the legacy wire.
 - `observe()` surfaces per-player and per-cell `effects` from the
   server (so a bot sees spawn-grace `invulnerable` and freshly-
   split `noMerge` state), reports `mass` on every entity (food,

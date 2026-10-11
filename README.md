@@ -52,6 +52,8 @@ Desktop (`claude_desktop_config.json`):
 | `stop`        | Clear any active movement and halt in place.                              |
 | `split`       | Native `split` action. Refused with a clear error when the server has not granted `split` in `welcome.actions` / `actionsChanged`. |
 | `eject`       | Native eject-mass action. Refused with a clear error when the server has not granted `eject` in `welcome.actions` / `actionsChanged`. |
+| `read_chat`   | Drain and return every chat message buffered since the last call, oldest-first (sender, scope, text, optional `data`, timestamp). Reports how many messages were dropped on overflow between reads so the agent knows when to poll more often. Buffer is per game session; drained on each call. 1.0 wire only (legacy returns an empty drain). |
+| `send_chat`   | Send a chat message. `scope` defaults to `all`; use `direct` with `to` set to a player id for a private message. Optional `data` field carries a flat payload of JSON primitives for structured bot-to-bot exchanges. Server-side rate-limited and length-capped per the active `rules` bag; excess dropped silently. Refused when the server has not granted the `chat` capability or when the game server speaks the legacy wire. |
 | `quit_game`   | Leave the current game. MCP session stays open; call `join_game` to rejoin. No-op if not currently in a game. |
 
 See `src/session.ts` for exact schemas.
@@ -64,14 +66,19 @@ Tool calls over the Model Context Protocol translate to the native
 Socket.IO events the game server already understands.
 
 On the 1.0 wire the MCP server subscribes with capability set
-`{presence, steer, act}`, sends its user-agent as
+`{presence, steer, act, chat}`, sends its user-agent as
 `cells-mcp/<version>` (read from `package.json`), and forwards the
 MCP session id as `subscribe.clientId` so one agent run stays
 coherent in the game server's admin audit across reconnects.
 Actions use the generic `action { type }` event (`split`,
 `eject`); the client refuses to send an action not currently
 listed in `welcome.actions` and updates its granted set on
-`actionsChanged`.
+`actionsChanged`. Incoming `message` events are buffered on the
+`GameClient` (bounded ring of 100 entries) and drained by the
+`read_chat` tool; a non-zero `dropped_since_last_read` tells the
+agent the buffer overflowed between polls. The `send_chat` tool
+emits a `say` and refuses when the server has not granted the
+`chat` capability.
 
 Configuration lives in `config.json` at the repo root (copy of
 `config.example.json`). The loader searches, in order:
