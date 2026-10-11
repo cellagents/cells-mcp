@@ -251,6 +251,19 @@ export class LegacyGameClient {
     return true;
   }
 
+  /** The pre-fork wire has no chat primitive. Keep the method so
+   *  session.ts can call it uniformly through AnyGameClient; the
+   *  drain is always empty. */
+  drainChat(): { messages: never[]; droppedSinceLastRead: number } {
+    return { messages: [], droppedSinceLastRead: 0 };
+  }
+
+  /** Legacy wire has no chat; the MCP tool reports it. */
+  sendChat(_text: string, _opts: unknown = {}): { ok: false; error: string } {
+    void _text; void _opts;
+    return { ok: false, error: 'this game server does not support chat (legacy wire)' };
+  }
+
   disconnect(): void {
     // Intentional close by the MCP side. Don't propagate as a termination
     // signal; the caller already knows it tore the session down.

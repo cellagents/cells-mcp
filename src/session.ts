@@ -295,6 +295,58 @@ export function createSession(
     }
   );
 
+  server.registerTool(
+    'read_chat',
+    {
+      description: 'Drain and return every chat message buffered since the last call. ' +
+        'Messages are returned oldest-first with their sender, scope (all | team | direct), ' +
+        "text, optional structured `data` payload, and server timestamp. `from` is null for " +
+        'admin / server broadcasts. A non-zero `dropped_since_last_read` means the buffer ' +
+        'overflowed between reads and that many older messages were dropped; poll more often ' +
+        'if that happens. The buffer is per game session and is cleared on each drain.',
+      inputSchema: {}
+    },
+    async () => {
+      bump();
+      const game = requireJoined();
+      const drain = game.drainChat();
+      return { content: [{ type: 'text', text: JSON.stringify({
+        ok: true,
+        messages: drain.messages,
+        dropped_since_last_read: drain.droppedSinceLastRead
+      }) }] };
+    }
+  );
+
+  server.registerTool(
+    'send_chat',
+    {
+      description: 'Send a chat message. Scope defaults to "all" (visible to everyone). ' +
+        'Use scope "direct" with `to` set to a target player id to private-message one player; ' +
+        'the server echoes it back so the sender will see it too in the next read_chat drain. ' +
+        '`data` is an optional flat payload of JSON primitives (string, number, boolean) for ' +
+        'structured bot-to-bot exchanges. Text is truncated server-side to rules.chatMaxLength; ' +
+        'rate limited to rules.chatRateHz per second (excess dropped silently).',
+      inputSchema: {
+        text: z.string().min(1).describe('message body'),
+        scope: z.enum(['all', 'direct']).optional().describe("defaults to 'all'"),
+        to: z.string().optional().describe("target player id when scope is 'direct'"),
+        data: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional()
+          .describe('optional flat payload of JSON primitives')
+      }
+    },
+    async (args) => {
+      bump();
+      const game = requireJoined();
+      const result = game.sendChat(args.text, {
+        scope: args.scope,
+        to: args.to,
+        data: args.data
+      });
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    }
+  );
+
   server.connect(transport).catch(err => {
     console.error('[session] mcp connect failed:', err);
   });

@@ -19,12 +19,11 @@ import {
     type Kick,
     type Entity,
     type Effect,
-    type Rules
+    type Rules,
+    type Message,
+    type MessageScope
 } from '@cellagents/game-protocol';
 
-/** User-agent string sent to the server on subscribe. Keep in sync
- *  with package.json; manual bump is fine until this repo adopts
- *  a build-time inject. */
 /** User-agent string. Resolved at module load from this package's
  *  own `package.json`, so a version bump here never requires a code
  *  edit. Falls back to `cells-mcp/unknown` if the manifest can't be
@@ -99,6 +98,26 @@ type SteeringState =
 const ARRIVAL_THRESHOLD = 80;
 const HEADING_PROJECTION = 500;
 
+/** How many incoming chat messages to retain between read_chat
+ *  drains. Older messages are dropped once the buffer is full; the
+ *  dropped count is reported in the next drain so the agent knows
+ *  it missed something. 100 is enough for a dense exchange without
+ *  being memory-hostile. */
+const CHAT_BUFFER_MAX = 100;
+
+export interface BufferedMessage {
+    from: { id: string; name: string | null } | null;
+    scope: MessageScope;
+    text: string;
+    data?: Record<string, string | number | boolean>;
+    time: number;
+}
+
+export interface ChatDrain {
+    messages: BufferedMessage[];
+    droppedSinceLastRead: number;
+}
+
 export class GameClient {
     private socket: Socket;
     private welcomeResolved = false;
@@ -114,8 +133,17 @@ export class GameClient {
     actions = new Set<string>();
     /** Active rules bag. Updated on welcome and rulesChanged. */
     rules: Rules = {};
+    /** Capabilities the server actually granted on welcome. The
+     *  `send_chat` MCP tool checks this before emitting a `say`; a
+     *  server that strips `chat` leaves us unable to send chat but
+     *  still able to read it (the socket receives broadcasts from
+     *  all senders regardless of our own grant). */
+    capabilities = new Set<string>();
 
     snapshot: WorldSnapshot | null = null;
+
+    private chatBuffer: BufferedMessage[] = [];
+    private chatDropped = 0;
 
     constructor(
         private readonly gameServerUrl: string,
@@ -136,7 +164,7 @@ export class GameClient {
             this.socket.emit(ClientEvent.subscribe, {
                 protocol: PROTOCOL_VERSION,
                 userAgent: CELLS_MCP_USER_AGENT,
-                capabilities: ['presence', 'steer', 'act'],
+                capabilities: ['presence', 'steer', 'act', 'chat'],
                 name: this.nickname,
                 screen: { width: this.viewport.width, height: this.viewport.height },
                 ...(this.clientId ? { clientId: this.clientId } : {})
@@ -146,6 +174,7 @@ export class GameClient {
         this.socket.on(ServerEvent.welcome, (payload: Welcome) => {
             this.actions = new Set(payload.actions);
             this.rules = payload.rules;
+            this.capabilities = new Set(payload.capabilities);
             if (!this.welcomeResolved) {
                 this.welcomeResolved = true;
                 this.startHeartbeat();
@@ -193,10 +222,28 @@ export class GameClient {
             this.markTerminated({ kind: 'rip' });
         });
 
-        this.socket.on(ServerEvent.message, () => {
-            // cells-mcp 2.0 exposes no messaging tools; ignore
-            // incoming `message` events quietly so a chat-full
-            // server doesn't flood stdout.
+        this.socket.on(ServerEvent.message, (payload: Message) => {
+            // Buffer every incoming message for the next read_chat
+            // drain. The buffer is bounded; on overflow the oldest
+            // messages are dropped and the drop count is reported
+            // in the next drain, so the agent can tell it missed
+            // some chat without us DOSing memory on a chat-full
+            // server.
+            if (!payload || typeof payload.text !== 'string') return;
+            const entry: BufferedMessage = {
+                from: payload.from ?? null,
+                scope: payload.scope,
+                text: payload.text,
+                time: typeof payload.time === 'number' ? payload.time : Date.now()
+            };
+            if (payload.data && typeof payload.data === 'object') {
+                entry.data = payload.data as Record<string, string | number | boolean>;
+            }
+            if (this.chatBuffer.length >= CHAT_BUFFER_MAX) {
+                this.chatBuffer.shift();
+                this.chatDropped++;
+            }
+            this.chatBuffer.push(entry);
         });
 
         this.socket.on('connect_error', (err: Error) => {
@@ -289,6 +336,49 @@ export class GameClient {
         if (!this.actions.has('split')) return false;
         this.socket.emit(ClientEvent.action, { type: 'split' });
         return true;
+    }
+
+    /** Drain and return every message buffered since the last call,
+     *  oldest first, plus how many entries were dropped on overflow
+     *  while the agent was away. The returned entries are no longer
+     *  held, so repeated reads return disjoint batches. */
+    drainChat(): ChatDrain {
+        const messages = this.chatBuffer;
+        const droppedSinceLastRead = this.chatDropped;
+        this.chatBuffer = [];
+        this.chatDropped = 0;
+        return { messages, droppedSinceLastRead };
+    }
+
+    /** Emit a `say`. Returns `{ok: true}` when the frame left the
+     *  socket, or `{ok: false, error}` when the server has not
+     *  granted the chat capability (so the frame would be dropped
+     *  server-side anyway). `scope` defaults to 'all'. For
+     *  scope='direct', `to` is the TARGET PLAYER id. `data` is an
+     *  optional flat payload of JSON primitives for bots that want
+     *  to exchange structured messages. */
+    sendChat(text: string, opts: {
+        scope?: MessageScope;
+        to?: string;
+        data?: Record<string, string | number | boolean>;
+    } = {}): { ok: true } | { ok: false; error: string } {
+        if (!this.capabilities.has('chat')) {
+            return { ok: false, error: "the server did not grant the 'chat' capability on this session" };
+        }
+        if (typeof text !== 'string' || text.length === 0) {
+            return { ok: false, error: 'text must be a non-empty string' };
+        }
+        const scope: MessageScope = opts.scope ?? 'all';
+        if (scope === 'direct' && (typeof opts.to !== 'string' || opts.to.length === 0)) {
+            return { ok: false, error: "scope 'direct' requires 'to' (target player id)" };
+        }
+        this.socket.emit(ClientEvent.say, {
+            scope,
+            text,
+            ...(scope === 'direct' ? { to: opts.to } : {}),
+            ...(opts.data ? { data: opts.data } : {})
+        });
+        return { ok: true };
     }
 
     disconnect(): void {
