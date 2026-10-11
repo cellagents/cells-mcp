@@ -15,9 +15,16 @@ Visit [**cellagents.dev**](https://cellagents.dev/) for overview of the full pro
 
 ## Compatibility
 
-Designed to work against any upstream `agar.io-clone` game server over Socket.IO.
+Primary target is cells-game 4.0+ speaking the official
+[`@cellagents/game-protocol`](https://github.com/cellagents/game-protocol)
+version 1.0 wire. At `join_game` time the MCP server probes
+`GET /protocol` on the configured game server; a successful
+`{ protocol, server }` response selects the 1.0 client, anything
+else falls back to a legacy Socket.IO client compatible with
+upstream `agar.io-clone` and archived cells-game 3.x servers.
 
-Point the MCP server at any such instance and the five tools below work the same way.
+Both modes expose the same MCP tool surface, so an agent never
+has to care which wire is active.
 
 ## Connecting a client
 
@@ -39,12 +46,12 @@ Desktop (`claude_desktop_config.json`):
 | Tool          | What it does                                                              |
 |---------------|---------------------------------------------------------------------------|
 | `join_game`   | Must be called first (and again after any game-session termination). Opens the Socket.IO connection, returns `player_id` and world dimensions. |
-| `observe`     | Compact JSON view of nearby world: own cells, nearest threats and prey, viruses, map edges, food hint. |
+| `observe`     | Compact JSON view of nearby world: own cells (with any `effects`), self-level `effects`, nearest threats and prey, viruses, map edges, food hint, and the server's current `rules.eatRatio`. Every entity carries `mass`. |
 | `move_to`     | Head toward world coordinates `{x, y}`. The MCP steers each tick and stops the cell on arrival. |
 | `set_heading` | Steer the cell at a fixed `angle` (radians) indefinitely until overridden or until the arena edge. |
 | `stop`        | Clear any active movement and halt in place.                              |
-| `split`       | Native `split` action.                                                    |
-| `eject`       | Native `fire food` action.                                                |
+| `split`       | Native `split` action. Refused with a clear error when the server has not granted `split` in `welcome.actions` / `actionsChanged`. |
+| `eject`       | Native eject-mass action. Refused with a clear error when the server has not granted `eject` in `welcome.actions` / `actionsChanged`. |
 | `quit_game`   | Leave the current game. MCP session stays open; call `join_game` to rejoin. No-op if not currently in a game. |
 
 See `src/session.ts` for exact schemas.
@@ -55,6 +62,16 @@ TypeScript Node.js server. One MCP session = one Socket.IO
 connection to the game server, playing as a regular named player.
 Tool calls over the Model Context Protocol translate to the native
 Socket.IO events the game server already understands.
+
+On the 1.0 wire the MCP server subscribes with capability set
+`{presence, steer, act}`, sends its user-agent as
+`cells-mcp/<version>` (read from `package.json`), and forwards the
+MCP session id as `subscribe.clientId` so one agent run stays
+coherent in the game server's admin audit across reconnects.
+Actions use the generic `action { type }` event (`split`,
+`eject`); the client refuses to send an action not currently
+listed in `welcome.actions` and updates its granted set on
+`actionsChanged`.
 
 Configuration lives in `config.json` at the repo root (copy of
 `config.example.json`). The loader searches, in order:
